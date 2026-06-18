@@ -1,0 +1,11 @@
+# zbudowana aplikacja (budowana przez CMake)
+release/
+build/
+
+# pliki tymczasowe / artefakty
+*.aps
+*.log
+*.o
+*.obj
+*.moc
+moc_*.cpp
