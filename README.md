@@ -1,8 +1,10 @@
 # Baza medycznych badań obrazowych
 
 Aplikacja desktopowa do przechowywania, wyszukiwania i przeglądania
-medycznych badań obrazowych (RTG, CT, USG, MRI). Pozwala dodawać pacjentów
-i badania, importować pliki DICOM i oglądać je w aplikacji.
+medycznych badań obrazowych (RTG, CT, USG, MRI). Pozwala dodawać i edytować
+pacjentów oraz badania, importować pliki i całe serie DICOM, a następnie
+oglądać je w aplikacji (przewijanie warstw, zoom, regulacja jasności/kontrastu).
+Obsługiwane są też skompresowane obrazy DICOM (JPEG Lossless, JPEG-LS).
 
 Stack: **C++ + Qt 6 (GUI) + PostgreSQL (baza) + DCMTK (DICOM)**.
 
@@ -16,23 +18,27 @@ start_baza.bat
 
 Skrypt startuje serwer PostgreSQL (port 5433) i uruchamia aplikację
 z katalogu `release\`. Przy pierwszym uruchomieniu aplikacja sama tworzy
-tabele i wstawia dane testowe (2 pacjentów + 3 badania).
+tabele — baza startuje pusta, dane dodajesz sam.
 
 Gotowy plik wykonywalny: `release\BazaBadanObrazowych.exe` (z ikoną).
+Katalog `release\` powstaje przy budowaniu (nie ma go w repozytorium) —
+jeśli go nie ma, najpierw zbuduj projekt (patrz "Budowanie od nowa").
 
 ## Pliki projektu
 - `main.cpp` — cała aplikacja (baza, okno główne, dialogi, podgląd DICOM)
 - `CMakeLists.txt` — konfiguracja budowania
 - `app.ico` / `app.rc` — ikona pliku `.exe`
 - `assets/app.png` — źródłowa grafika ikony
+- `data/` — przykładowe dane DICOM do testów (`CT-00000`, `MRI-00000`)
 - `start_baza.bat` — uruchamia serwer bazy + aplikację
-- `release/` — gotowa, samodzielna wersja (exe + wszystkie biblioteki DLL)
+- `release/` — gotowa wersja (exe + biblioteki DLL); generowana przy budowaniu
 
 ## Baza danych
 - serwer: PostgreSQL 16 (port **5433**)
 - baza: `medbaza`, użytkownik `postgres` (logowanie lokalne typu trust)
-- tabele: `patients`, `studies`, `series`, `images`
+- tabele: `patients`, `studies`, `images`
 - pliki DICOM trzymane są na dysku, w bazie zapisujemy tylko ścieżkę
+  (`images.file_path`), powiązaną z badaniem przez `images.study_id`
 
 Tabele tworzą się automatycznie przy starcie aplikacji (`initDB()`).
 
@@ -41,17 +47,18 @@ Tabele tworzą się automatycznie przy starcie aplikacji (`initDB()`).
 2. Pole "Szukaj po nazwisku" filtruje listę pacjentów.
 3. Przyciski na górze: **Dodaj pacjenta**, **Dodaj badanie**
    (dla zaznaczonego pacjenta), **Importuj DICOM** (pojedynczy plik) oraz
-   **Importuj serie** (cały folder z warstwami, np. `series-00001` z setkami
-   plików `.dcm`).
+   **Importuj serie** (cały folder z warstwami, np. `data/MRI-00000`
+   z wieloma plikami `.dcm`).
 4. **Prawy przycisk myszy (PPM)** na pacjencie lub badaniu — menu
    **Edytuj / Usuń**. Usunięcie pacjenta kasuje też jego badania i obrazy,
-   usunięcie badania kasuje jego serie i obrazy.
+   usunięcie badania kasuje jego obrazy.
 5. Dwuklik na badanie ładuje wszystkie jego warstwy do podglądu.
 6. W podglądzie DICOM:
-   - **kółko myszy** — przewijanie warstw (slice 1/267, 2/267, ...),
+   - **kółko myszy** lub **pionowy suwak po prawej** — przewijanie warstw
+     (slice 1/267, 2/267, ...),
    - **Ctrl + kółko** — zoom,
-   - suwaki **Okno / Poziom** — jasność i kontrast (np. tkanki miękkie
-     Poziom 40 / Okno 400, płuca Poziom -500 / Okno 1500).
+   - suwaki **W / L** (Window / Level) — jasność i kontrast (np. tkanki
+     miękkie L 40 / W 400, płuca L -500 / W 1500).
 
 > Seria DICOM to folder z wieloma plikami `.dcm` (po jednym na warstwę).
 > Importuj cały folder przez **Importuj serie**, a potem przewijaj warstwy
