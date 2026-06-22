@@ -10,28 +10,39 @@ find_package(DCMTK REQUIRED)
 
 set(SOURCES main.cpp)
 
-# ikona .exe na Windowsie
+# Windows: ikona .exe + okno bez konsoli
 if(WIN32)
-    set(SOURCES ${SOURCES} app.rc)
+    list(APPEND SOURCES app.rc)
+    add_executable(BazaBadanObrazowych WIN32 ${SOURCES})
+else()
+    add_executable(BazaBadanObrazowych ${SOURCES})
 endif()
-
-add_executable(BazaBadanObrazowych WIN32 ${SOURCES})
 
 target_include_directories(BazaBadanObrazowych PRIVATE ${DCMTK_INCLUDE_DIRS})
 
-# katalog ze statycznymi bibliotekami DCMTK
-target_link_directories(BazaBadanObrazowych PRIVATE
-    ${DCMTK_LIBRARY_DIRS}
-    "${DCMTK_DIR}/../lib"
-)
+# sciezki do bibliotek DCMTK
+if(WIN32 AND DCMTK_DIR)
+    target_link_directories(BazaBadanObrazowych PRIVATE
+        ${DCMTK_LIBRARY_DIRS}
+        "${DCMTK_DIR}/../lib"
+    )
+elseif(DCMTK_LIBRARY_DIRS)
+    target_link_directories(BazaBadanObrazowych PRIVATE ${DCMTK_LIBRARY_DIRS})
+endif()
 
-# DCMTK to kilka statycznych bibliotek ktore zaleza od siebie nawzajem,
-# wiec owijamy je w grupe linkera zeby nie przejmowac sie kolejnoscia
 target_link_libraries(BazaBadanObrazowych PRIVATE
     Qt6::Widgets
     Qt6::Sql
-    -Wl,--start-group ${DCMTK_LIBRARIES} -Wl,--end-group
 )
+
+# DCMTK: na g++/MinGW czasem trzeba grupy linkera (statyczne biblioteki)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(BazaBadanObrazowych PRIVATE
+        -Wl,--start-group ${DCMTK_LIBRARIES} -Wl,--end-group
+    )
+else()
+    target_link_libraries(BazaBadanObrazowych PRIVATE ${DCMTK_LIBRARIES})
+endif()
 
 # DCMTK na Windowsie potrzebuje bibliotek sieciowych systemu
 if(WIN32)

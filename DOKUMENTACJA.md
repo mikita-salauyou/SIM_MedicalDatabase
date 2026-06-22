@@ -183,7 +183,9 @@ serie, badania, a na końcu pacjenta (zgodnie z zależnościami kluczy obcych).
 
 ## 7. Kompilacja
 
-System budowania: **CMake + Ninja**, kompilator **MinGW (g++ 13)**.
+System budowania: **CMake + Ninja**.
+
+### Windows (MinGW)
 
 ```powershell
 $env:Path = "C:\Qt\Tools\mingw1310_64\bin;" + $env:Path
@@ -193,13 +195,32 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
 cmake --build build
 ```
 
-`CMakeLists.txt` szuka pakietów `Qt6` i `DCMTK` (`find_package`). Biblioteki
-DCMTK są statyczne i zależne od siebie, dlatego linkowane są w grupie
-linkera (`-Wl,--start-group ... --end-group`). Pliki Windows-only (ikona,
-biblioteki sieciowe) objęte są warunkiem `if(WIN32)`.
+Po zbudowaniu biblioteki Qt zbierane są obok exe narzędziem `windeployqt`
+(dołącza m.in. sterownik `sqldrivers\qsqlodbc.dll`).
 
-Po zbudowaniu biblioteki Qt zbierane są obok pliku wykonywalnego narzędziem
-`windeployqt` (dołącza m.in. sterownik `sqldrivers\qsqlodbc.dll`).
+### Ubuntu / Linux
+
+Zależności:
+
+```bash
+sudo apt install build-essential cmake ninja-build \
+  qt6-base-dev libqt6sql6-odbc libdcmtk-dev \
+  unixodbc odbc-postgresql postgresql
+```
+
+Budowanie:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+Plik wykonywalny: `build/BazaBadanObrazowych`.
+
+`CMakeLists.txt` szuka pakietów `Qt6` i `DCMTK` przez `find_package`.
+Na Linuxie nie trzeba podawać `DCMTK_DIR` — biblioteka jest w systemie
+(po `apt install libdcmtk-dev`). Pliki tylko pod Windows (ikona, biblioteki
+sieciowe) są w warunku `if(WIN32)`.
 
 ---
 
@@ -222,17 +243,6 @@ z poziomu aplikacji (przyciski „Importuj DICOM" / „Importuj serie").
 - Dane logowania domyślne: serwer `127.0.0.1`, baza `medbaza`,
   użytkownik `postgres`. Wpisuje się je w oknie logowania przy starcie.
 - Tekst połączenia ODBC (klasa `LoginDialog`):
-  `Driver={PostgreSQL Unicode(x64)};Server=...;Port=...;Database=...;Uid=...;Pwd=...;`
+  Windows: `Driver={PostgreSQL Unicode(x64)};...`
+  Linux: `Driver={PostgreSQL Unicode};...`
 - Źródła danych (katalogi z plikami) dodają się automatycznie przy imporcie.
-
----
-
-## 10. Podział pracy
-
-Projekt realizowany w zespole 2-osobowym, ze wsparciem narzędzia AI:
-- **Osoba 1** — baza danych (schemat, zapytania SQL, połączenie ODBC,
-  okno logowania), import danych i obsługa źródeł.
-- **Osoba 2** — interfejs graficzny (okno główne, dialogi pacjenta/badania),
-  przeglądarka DICOM (renderowanie, nawigacja, okno/poziom), eksport XML.
-- **Wsparcie AI** — pomoc w konfiguracji środowiska (Qt, DCMTK, ODBC),
-  debugowanie błędów kompilacji i linkowania, przegląd kodu.

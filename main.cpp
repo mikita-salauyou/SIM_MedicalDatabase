@@ -557,9 +557,14 @@ public:
     // tekst polaczenia dla sterownika PostgreSQL ODBC
     QString connectionString() const
     {
-        return QString("Driver={PostgreSQL Unicode(x64)};Server=%1;Port=%2;"
-                       "Database=%3;Uid=%4;Pwd=%5;")
-            .arg(hostEdit->text(), portEdit->text(), dbEdit->text(),
+#ifdef Q_OS_WIN
+        QString driver = "PostgreSQL Unicode(x64)";
+#else
+        QString driver = "PostgreSQL Unicode";
+#endif
+        return QString("Driver={%1};Server=%2;Port=%3;"
+                       "Database=%4;Uid=%5;Pwd=%6;")
+            .arg(driver, hostEdit->text(), portEdit->text(), dbEdit->text(),
                  userEdit->text(), passEdit->text());
     }
 
