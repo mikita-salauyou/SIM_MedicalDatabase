@@ -9,3 +9,6 @@ build/
 *.obj
 *.moc
 moc_*.cpp
+
+# wyeksportowana lista obrazow
+obrazy.xml

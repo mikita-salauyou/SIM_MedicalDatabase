@@ -22,9 +22,11 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QDialogButtonBox>
+#include <QPushButton>
 #include <QMessageBox>
 #include <QMenu>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QDir>
 #include <QStringList>
 #include <QAbstractItemView>
@@ -34,6 +36,9 @@
 #include <QWheelEvent>
 #include <QDate>
 #include <QDebug>
+#include <QFile>
+#include <QXmlStreamWriter>
+#include <QDateTime>
 #include <cstring>
 #include <utility>
 
@@ -41,6 +46,8 @@
 #include <dcmtk/dcmimgle/dcmimage.h>
 #include <dcmtk/dcmjpeg/djdecode.h>
 #include <dcmtk/dcmjpls/djdecode.h>
+#include <dcmtk/dcmdata/dcfilefo.h>
+#include <dcmtk/dcmdata/dcdeftag.h>
 
 // tworzenie tabel
 bool initDB()
@@ -66,12 +73,70 @@ bool initDB()
            "type VARCHAR(50),"
            "description TEXT)");
 
-    q.exec("CREATE TABLE IF NOT EXISTS images ("
+    // seria nalezy do badania, ma w sobie wiele obrazow
+    q.exec("CREATE TABLE IF NOT EXISTS series ("
            "id SERIAL PRIMARY KEY,"
            "study_id INTEGER REFERENCES studies(id),"
+           "modality VARCHAR(16),"
+           "description TEXT)");
+
+    // katalogi z plikami na dysku
+    q.exec("CREATE TABLE IF NOT EXISTS sources ("
+           "id SERIAL PRIMARY KEY,"
+           "nazwa TEXT,"
+           "sciezka TEXT UNIQUE)");
+
+    // file_path jest wzgledny do katalogu zrodla
+    q.exec("CREATE TABLE IF NOT EXISTS images ("
+           "id SERIAL PRIMARY KEY,"
+           "series_id INTEGER REFERENCES series(id),"
+           "source_id INTEGER REFERENCES sources(id),"
            "file_path TEXT)");
 
     return true;
+}
+
+// wyciaga modality (CT/MR...) z pliku dicom
+QString odczytajModality(const QString &path)
+{
+    DcmFileFormat ff;
+    if (ff.loadFile(path.toLocal8Bit().constData()).good()) {
+        OFString m;
+        if (ff.getDataset()->findAndGetOFString(DCM_Modality, m).good())
+            return QString::fromLatin1(m.c_str());
+    }
+    return "";
+}
+
+// szuka zrodla dla danego katalogu, a jak nie ma to dodaje nowe
+int zrodloDlaKatalogu(const QString &absDir)
+{
+    QSqlQuery q;
+    q.exec("SELECT id, sciezka FROM sources");
+    while (q.next()) {
+        QString s = q.value(1).toString();
+        if (absDir == s || absDir.startsWith(s + "/"))
+            return q.value(0).toInt();
+    }
+    QSqlQuery ins;
+    ins.prepare("INSERT INTO sources (nazwa, sciezka) VALUES (?, ?) RETURNING id");
+    ins.addBindValue(QDir(absDir).dirName());
+    ins.addBindValue(absDir);
+    if (ins.exec() && ins.next())
+        return ins.value(0).toInt();
+    return -1;
+}
+
+// zwraca sciezke katalogu zrodla po id
+QString sciezkaZrodla(int id)
+{
+    QSqlQuery q;
+    q.prepare("SELECT sciezka FROM sources WHERE id=?");
+    q.addBindValue(id);
+    q.exec();
+    if (q.next())
+        return q.value(0).toString();
+    return "";
 }
 
 // podglad DICOM
@@ -313,18 +378,23 @@ private slots:
 
         QSqlQuery q;
         if (editId > 0) {
-            q.prepare("UPDATE patients SET surname=:surname, name=:name, "
-                      "birth_date=:bdate, pesel=:pesel, sex=:sex WHERE id=:id");
-            q.bindValue(":id", editId);
+            q.prepare("UPDATE patients SET surname=?, name=?, "
+                      "birth_date=?, pesel=?, sex=? WHERE id=?");
+            q.addBindValue(surnameEdit->text());
+            q.addBindValue(nameEdit->text());
+            q.addBindValue(dateEdit->date().toString("yyyy-MM-dd"));
+            q.addBindValue(peselEdit->text());
+            q.addBindValue(sexCombo->currentText());
+            q.addBindValue(editId);
         } else {
             q.prepare("INSERT INTO patients (surname, name, birth_date, pesel, sex) "
-                      "VALUES (:surname, :name, :bdate, :pesel, :sex)");
+                      "VALUES (?, ?, ?, ?, ?)");
+            q.addBindValue(surnameEdit->text());
+            q.addBindValue(nameEdit->text());
+            q.addBindValue(dateEdit->date().toString("yyyy-MM-dd"));
+            q.addBindValue(peselEdit->text());
+            q.addBindValue(sexCombo->currentText());
         }
-        q.bindValue(":surname", surnameEdit->text());
-        q.bindValue(":name", nameEdit->text());
-        q.bindValue(":bdate", dateEdit->date().toString("yyyy-MM-dd"));
-        q.bindValue(":pesel", peselEdit->text());
-        q.bindValue(":sex", sexCombo->currentText());
 
         if (!q.exec()) {
             QMessageBox::critical(this, "Blad",
@@ -339,8 +409,8 @@ private:
     void wczytajDane()
     {
         QSqlQuery q;
-        q.prepare("SELECT surname, name, birth_date, pesel, sex FROM patients WHERE id=:id");
-        q.bindValue(":id", editId);
+        q.prepare("SELECT surname, name, birth_date, pesel, sex FROM patients WHERE id=?");
+        q.addBindValue(editId);
         q.exec();
         if (q.next()) {
             surnameEdit->setText(q.value(0).toString());
@@ -404,17 +474,20 @@ private slots:
     {
         QSqlQuery q;
         if (editId > 0) {
-            q.prepare("UPDATE studies SET study_date=:date, type=:type, "
-                      "description=:desc WHERE id=:id");
-            q.bindValue(":id", editId);
+            q.prepare("UPDATE studies SET study_date=?, type=?, "
+                      "description=? WHERE id=?");
+            q.addBindValue(dateEdit->date().toString("yyyy-MM-dd"));
+            q.addBindValue(typeCombo->currentText());
+            q.addBindValue(descEdit->text());
+            q.addBindValue(editId);
         } else {
             q.prepare("INSERT INTO studies (patient_id, study_date, type, description) "
-                      "VALUES (:pid, :date, :type, :desc)");
-            q.bindValue(":pid", patientId);
+                      "VALUES (?, ?, ?, ?)");
+            q.addBindValue(patientId);
+            q.addBindValue(dateEdit->date().toString("yyyy-MM-dd"));
+            q.addBindValue(typeCombo->currentText());
+            q.addBindValue(descEdit->text());
         }
-        q.bindValue(":date", dateEdit->date().toString("yyyy-MM-dd"));
-        q.bindValue(":type", typeCombo->currentText());
-        q.bindValue(":desc", descEdit->text());
 
         if (!q.exec()) {
             QMessageBox::critical(this, "Blad",
@@ -429,8 +502,8 @@ private:
     void wczytajDane()
     {
         QSqlQuery q;
-        q.prepare("SELECT study_date, type, description FROM studies WHERE id=:id");
-        q.bindValue(":id", editId);
+        q.prepare("SELECT study_date, type, description FROM studies WHERE id=?");
+        q.addBindValue(editId);
         q.exec();
         if (q.next()) {
             dateEdit->setDate(q.value(0).toDate());
@@ -445,6 +518,57 @@ private:
     QDateEdit *dateEdit;
     QComboBox *typeCombo;
     QLineEdit *descEdit;
+};
+
+// okno logowania do bazy
+class LoginDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    LoginDialog(QWidget *parent = nullptr) : QDialog(parent)
+    {
+        setWindowTitle("Logowanie do bazy danych");
+
+        hostEdit = new QLineEdit("127.0.0.1", this);
+        portEdit = new QLineEdit("5433", this);
+        dbEdit = new QLineEdit("medbaza", this);
+        userEdit = new QLineEdit("postgres", this);
+        passEdit = new QLineEdit("postgres", this);
+        passEdit->setEchoMode(QLineEdit::Password);
+
+        QFormLayout *form = new QFormLayout();
+        form->addRow("Serwer:", hostEdit);
+        form->addRow("Port:", portEdit);
+        form->addRow("Baza:", dbEdit);
+        form->addRow("Uzytkownik:", userEdit);
+        form->addRow("Haslo:", passEdit);
+
+        QDialogButtonBox *buttons = new QDialogButtonBox(
+            QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+        buttons->button(QDialogButtonBox::Ok)->setText("Polacz");
+        connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+
+        QVBoxLayout *lay = new QVBoxLayout(this);
+        lay->addLayout(form);
+        lay->addWidget(buttons);
+    }
+
+    // tekst polaczenia dla sterownika PostgreSQL ODBC
+    QString connectionString() const
+    {
+        return QString("Driver={PostgreSQL Unicode(x64)};Server=%1;Port=%2;"
+                       "Database=%3;Uid=%4;Pwd=%5;")
+            .arg(hostEdit->text(), portEdit->text(), dbEdit->text(),
+                 userEdit->text(), passEdit->text());
+    }
+
+private:
+    QLineEdit *hostEdit;
+    QLineEdit *portEdit;
+    QLineEdit *dbEdit;
+    QLineEdit *userEdit;
+    QLineEdit *passEdit;
 };
 
 // glowne okno
@@ -463,10 +587,12 @@ public:
         QAction *aBadanie = tb->addAction("Dodaj badanie");
         QAction *aDicom = tb->addAction("Importuj DICOM");
         QAction *aSeria = tb->addAction("Importuj serie");
+        QAction *aEksport = tb->addAction("Eksportuj XML");
         connect(aPacjent, &QAction::triggered, this, &MainWindow::dodajPacjenta);
         connect(aBadanie, &QAction::triggered, this, &MainWindow::dodajBadanie);
         connect(aDicom, &QAction::triggered, this, &MainWindow::importujDicom);
         connect(aSeria, &QAction::triggered, this, &MainWindow::importujSerie);
+        connect(aEksport, &QAction::triggered, this, &MainWindow::eksportujXml);
 
         // lewa strona - pacjenci + filtr
         QWidget *leftPanel = new QWidget(this);
@@ -526,11 +652,14 @@ private slots:
         int row = index.row();
         int studyId = studiesModel->data(studiesModel->index(row, 0)).toInt();
 
-        // zbieramy wszystkie warstwy tego badania, posortowane wg sciezki
+        // bierzemy wszystkie obrazy badania, sciezka = zrodlo + sciezka wzgledna
         QSqlQuery q;
-        q.prepare("SELECT file_path FROM images "
-                  "WHERE study_id = :sid ORDER BY file_path");
-        q.bindValue(":sid", studyId);
+        q.prepare("SELECT src.sciezka || '/' || i.file_path "
+                  "FROM images i "
+                  "JOIN series se ON i.series_id = se.id "
+                  "JOIN sources src ON i.source_id = src.id "
+                  "WHERE se.study_id = ? ORDER BY i.file_path");
+        q.addBindValue(studyId);
         q.exec();
 
         QStringList paths;
@@ -582,10 +711,29 @@ private slots:
         if (path.isEmpty())
             return;
 
+        QFileInfo fi(path);
+        int sourceId = zrodloDlaKatalogu(fi.absolutePath());
+        QString rel = QDir(sciezkaZrodla(sourceId)).relativeFilePath(fi.absoluteFilePath());
+
+        // pojedynczy plik = seria z jedna warstwa
+        QSqlQuery qs;
+        qs.prepare("INSERT INTO series (study_id, modality, description) "
+                   "VALUES (?, ?, 'pojedynczy plik') RETURNING id");
+        qs.addBindValue(studyId);
+        qs.addBindValue(odczytajModality(path));
+        if (!qs.exec() || !qs.next()) {
+            QMessageBox::critical(this, "Blad",
+                "Nie udalo sie dodac serii:\n" + qs.lastError().text());
+            return;
+        }
+        int seriesId = qs.value(0).toInt();
+
         QSqlQuery q;
-        q.prepare("INSERT INTO images (study_id, file_path) VALUES (:sid, :path)");
-        q.bindValue(":sid", studyId);
-        q.bindValue(":path", path);
+        q.prepare("INSERT INTO images (series_id, source_id, file_path) "
+                  "VALUES (?, ?, ?)");
+        q.addBindValue(seriesId);
+        q.addBindValue(sourceId);
+        q.addBindValue(rel);
         if (!q.exec()) {
             QMessageBox::critical(this, "Blad",
                 "Nie udalo sie dodac obrazu:\n" + q.lastError().text());
@@ -619,15 +767,34 @@ private slots:
             return;
         }
 
-        // wszystkie pliki z folderu dodajemy jako warstwy tego badania
+        int sourceId = zrodloDlaKatalogu(d.absolutePath());
+        QString sciezkaZr = sciezkaZrodla(sourceId);
+
+        // jedna seria na caly folder
+        QSqlQuery qs;
+        qs.prepare("INSERT INTO series (study_id, modality, description) "
+                   "VALUES (?, ?, ?) RETURNING id");
+        qs.addBindValue(studyId);
+        qs.addBindValue(odczytajModality(d.absoluteFilePath(pliki.first())));
+        qs.addBindValue(d.dirName());
+        if (!qs.exec() || !qs.next()) {
+            QMessageBox::critical(this, "Blad",
+                "Nie udalo sie dodac serii:\n" + qs.lastError().text());
+            return;
+        }
+        int seriesId = qs.value(0).toInt();
+
         QStringList fullPaths;
         for (const QString &p : pliki) {
             QString full = d.absoluteFilePath(p);
             fullPaths << full;
+            QString rel = QDir(sciezkaZr).relativeFilePath(full);
             QSqlQuery q2;
-            q2.prepare("INSERT INTO images (study_id, file_path) VALUES (:sid, :path)");
-            q2.bindValue(":sid", studyId);
-            q2.bindValue(":path", full);
+            q2.prepare("INSERT INTO images (series_id, source_id, file_path) "
+                       "VALUES (?, ?, ?)");
+            q2.addBindValue(seriesId);
+            q2.addBindValue(sourceId);
+            q2.addBindValue(rel);
             q2.exec();
         }
 
@@ -635,6 +802,59 @@ private slots:
             QString("Zaimportowano serie: %1 warstw.").arg(pliki.size()));
         viewer->loadSeries(fullPaths);
         rightTabs->setCurrentWidget(viewer);
+    }
+
+    void eksportujXml()
+    {
+        // zrzut wszystkich obrazow do pliku XML (sciezka, rozmiar, data)
+        QString plik = QFileDialog::getSaveFileName(this, "Zapisz XML",
+            "obrazy.xml", "Pliki XML (*.xml)");
+        if (plik.isEmpty())
+            return;
+
+        QFile f(plik);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QMessageBox::critical(this, "Blad", "Nie udalo sie otworzyc pliku do zapisu.");
+            return;
+        }
+
+        QSqlQuery q;
+        q.exec("SELECT src.sciezka || '/' || i.file_path, p.surname, p.name, "
+               "st.study_date, st.type, se.modality "
+               "FROM images i "
+               "JOIN series se ON i.series_id = se.id "
+               "JOIN studies st ON se.study_id = st.id "
+               "JOIN patients p ON st.patient_id = p.id "
+               "JOIN sources src ON i.source_id = src.id "
+               "ORDER BY i.id");
+
+        QXmlStreamWriter xml(&f);
+        xml.setAutoFormatting(true);
+        xml.writeStartDocument();
+        xml.writeStartElement("obrazy");
+
+        int licznik = 0;
+        while (q.next()) {
+            QString sciezka = q.value(0).toString();
+            QFileInfo fi(sciezka);
+
+            xml.writeStartElement("obraz");
+            xml.writeTextElement("pacjent", q.value(1).toString() + " " + q.value(2).toString());
+            xml.writeTextElement("badanie", q.value(3).toString() + " " + q.value(4).toString());
+            xml.writeTextElement("modalnosc", q.value(5).toString());
+            xml.writeTextElement("sciezka", sciezka);
+            xml.writeTextElement("rozmiar", QString::number(fi.size()));
+            xml.writeTextElement("data", fi.lastModified().toString("yyyy-MM-dd HH:mm"));
+            xml.writeEndElement();
+            licznik++;
+        }
+
+        xml.writeEndElement();
+        xml.writeEndDocument();
+        f.close();
+
+        QMessageBox::information(this, "OK",
+            QString("Zapisano %1 obrazow do pliku XML.").arg(licznik));
     }
 
     void filtrujPacjentow(const QString &text)
@@ -697,9 +917,12 @@ private slots:
 private:
     void usunPacjenta(int pid)
     {
-        // najpierw dzieci (obrazy, badania), potem pacjent
+        // najpierw dzieci (obrazy, serie, badania), potem pacjent
         QSqlQuery q;
-        q.exec(QString("DELETE FROM images WHERE study_id IN "
+        q.exec(QString("DELETE FROM images WHERE series_id IN "
+                       "(SELECT se.id FROM series se JOIN studies st ON se.study_id=st.id "
+                       "WHERE st.patient_id=%1)").arg(pid));
+        q.exec(QString("DELETE FROM series WHERE study_id IN "
                        "(SELECT id FROM studies WHERE patient_id=%1)").arg(pid));
         q.exec(QString("DELETE FROM studies WHERE patient_id=%1").arg(pid));
         q.exec(QString("DELETE FROM patients WHERE id=%1").arg(pid));
@@ -708,7 +931,9 @@ private:
     void usunBadanie(int sid)
     {
         QSqlQuery q;
-        q.exec(QString("DELETE FROM images WHERE study_id=%1").arg(sid));
+        q.exec(QString("DELETE FROM images WHERE series_id IN "
+                       "(SELECT id FROM series WHERE study_id=%1)").arg(sid));
+        q.exec(QString("DELETE FROM series WHERE study_id=%1").arg(sid));
         q.exec(QString("DELETE FROM studies WHERE id=%1").arg(sid));
     }
 
@@ -733,8 +958,8 @@ private:
     {
         QSqlQuery q;
         q.prepare("SELECT id, study_date, type, description FROM studies "
-                  "WHERE patient_id = :pid ORDER BY study_date");
-        q.bindValue(":pid", patientId);
+                  "WHERE patient_id = ? ORDER BY study_date");
+        q.addBindValue(patientId);
         q.exec();
 
         studiesModel->setQuery(std::move(q));
@@ -762,17 +987,19 @@ int main(int argc, char *argv[])
     DJDecoderRegistration::registerCodecs();
     DJLSDecoderRegistration::registerCodecs();
 
-    QSqlDatabase db = QSqlDatabase::addDatabase("QPSQL");
-    db.setHostName("localhost");
-    db.setPort(5433);
-    db.setDatabaseName("medbaza");
-    db.setUserName("postgres");
-    db.setPassword("postgres");
-
-    if (!db.open()) {
-        QMessageBox::critical(nullptr, "Blad",
+    // logowanie do bazy przez ODBC - powtarzaj az do udanego polaczenia
+    LoginDialog login;
+    while (true) {
+        if (login.exec() != QDialog::Accepted)
+            return 0;
+        if (QSqlDatabase::contains(QSqlDatabase::defaultConnection))
+            QSqlDatabase::removeDatabase(QSqlDatabase::defaultConnection);
+        QSqlDatabase db = QSqlDatabase::addDatabase("QODBC");
+        db.setDatabaseName(login.connectionString());
+        if (db.open())
+            break;
+        QMessageBox::critical(nullptr, "Blad logowania",
             "Nie udalo sie polaczyc z baza:\n" + db.lastError().text());
-        return 1;
     }
 
     if (!initDB()) {
