@@ -98,9 +98,54 @@ spójność między poziomami.
 
 ---
 
-## 4. Klasy
+## 4. Klasy i diagram UML
 
 Aplikacja opiera się na klasach Qt (`QDialog`, `QWidget`, `QMainWindow`).
+
+```
+                     +-------------------------+
+                     |     <<QMainWindow>>     |
+                     |        MainWindow       |
+                     +-------------------------+
+                     | -patientsModel          |
+                     | -studiesModel           |
+                     | -patientsView           |
+                     | -studiesView            |
+                     | -viewer : DicomViewer*  |
+                     | -currentPatientId : int |
+                     +-------------------------+
+                     | +dodajPacjenta()        |
+                     | +dodajBadanie()         |
+                     | +importujDicom()        |
+                     | +importujSerie()        |
+                     | +eksportujXml()         |
+                     | +zaladujPacjentow()     |
+                     | +zaladujBadania()       |
+                     +------------+------------+
+                                  | tworzy (creates) / uzywa (uses)
+       +----------------+--------+--------+------------------+
+       |                |                 |                  |
++------v-------+ +------v-------+ +-------v------+ +---------v----+
+| <<QDialog>>  | | <<QDialog>>  | | <<QDialog>>  | | <<QWidget>>  |
+| LoginDialog  | | AddPatient   | | AddStudy     | | DicomViewer  |
+|              | | Dialog       | | Dialog       | |              |
++--------------+ +--------------+ +--------------+ +--------------+
+| -hostEdit    | | -surnameEdit | | -patientId   | | -slices      |
+| -portEdit    | | -nameEdit    | | -dateEdit    | | -current     |
+| -dbEdit      | | -dateEdit    | | -typeCombo   | | -dcmImage    |
+| -userEdit    | | -peselEdit   | | -descEdit    | | -scaleFactor |
+| -passEdit    | | -sexCombo    | | -editId      | | 3x QSlider   |
++--------------+ +--------------+ +--------------+ +--------------+
+| +connection  | | +zapisz()    | | +zapisz()    | | +loadSeries()|
+|  String()    | | -wczytajDane | | -wczytajDane | | +loadFile()  |
++--------------+ +--------------+ +--------------+ | -pokazWarstwe|
+                                                   | -przerysuj() |
+                                                   | -wheelEvent()|
+                                                   +--------------+
+
+Wolne funkcje (poza klasami):  initDB() · odczytajModality()
+                               zrodloDlaKatalogu() · sciezkaZrodla()
+```
 
 ### LoginDialog (QDialog)
 Okno logowania do bazy. Pola: serwer, port, baza, użytkownik, hasło.
@@ -139,7 +184,68 @@ przyciskiem myszy.
 
 ---
 
-## 5. Algorytmy
+## 5. Funkcje i metody (opis)
+
+**Funkcje pomocnicze (wolne funkcje)**
+
+| Funkcja | Opis |
+|---|---|
+| `initDB()` | Tworzy tabele bazy (`CREATE TABLE IF NOT EXISTS`); zwraca `bool`. |
+| `odczytajModality(path)` | Odczytuje tag `Modality` (CT/MR) z pliku DICOM. |
+| `zrodloDlaKatalogu(dir)` | Znajduje źródło dla katalogu lub dodaje nowe; zwraca `id`. |
+| `sciezkaZrodla(id)` | Zwraca bezwzględną ścieżkę źródła po jego `id`. |
+
+**LoginDialog**
+
+| Metoda | Opis |
+|---|---|
+| `LoginDialog(parent)` | Buduje okno logowania (serwer, port, baza, user, hasło). |
+| `connectionString()` | Składa tekst połączenia ODBC (różny dla Windows/Linux). |
+
+**AddPatientDialog**
+
+| Metoda | Opis |
+|---|---|
+| `AddPatientDialog(parent, editId)` | Formularz pacjenta; `editId>0` = edycja. |
+| `zapisz()` | Waliduje i zapisuje pacjenta (`INSERT`/`UPDATE`). |
+| `wczytajDane()` | Wczytuje dane pacjenta przy edycji. |
+
+**AddStudyDialog**
+
+| Metoda | Opis |
+|---|---|
+| `AddStudyDialog(patientId, parent, editId)` | Formularz badania dla pacjenta. |
+| `zapisz()` | Zapisuje badanie (`INSERT`/`UPDATE`). |
+| `wczytajDane()` | Wczytuje dane badania przy edycji. |
+
+**DicomViewer**
+
+| Metoda | Opis |
+|---|---|
+| `loadSeries(paths)` | Wczytuje serię (listę warstw) i pokazuje pierwszą. |
+| `loadFile(path)` | Wczytuje pojedynczy plik jako serię z jedną warstwą. |
+| `pokazWarstwe(idx)` | Przełącza i wczytuje warstwę o indeksie `idx`. |
+| `przerysuj()` | Renderuje obraz z aktualnym oknem/poziomem i skalą. |
+| `wheelEvent(e)` | Kółko = warstwy, Ctrl+kółko = zoom. |
+
+**MainWindow**
+
+| Metoda | Opis |
+|---|---|
+| `onPatientClicked(i)` | Klik pacjenta → ładuje jego badania. |
+| `onStudyDoubleClicked(i)` | Dwuklik badania → ładuje obrazy do podglądu. |
+| `dodajPacjenta()` / `dodajBadanie()` | Otwierają formularze dodawania. |
+| `importujDicom()` | Import pojedynczego pliku DICOM do badania. |
+| `importujSerie()` | Import całego folderu (serii) DICOM. |
+| `eksportujXml()` | Eksport listy obrazów do pliku XML. |
+| `filtrujPacjentow(t)` | Filtruje listę pacjentów po nazwisku. |
+| `patientMenu(p)` / `studyMenu(p)` | Menu PPM: edycja / usuwanie. |
+| `usunPacjenta(id)` / `usunBadanie(id)` | Usuwanie kaskadowe. |
+| `zaladujPacjentow(f)` / `zaladujBadania(id)` | Ładują dane do tabel. |
+
+---
+
+## 6. Algorytmy
 
 **Renderowanie DICOM (okno / poziom).** Obraz DICOM ma wartości w dużym
 zakresie (np. jednostki Hounsfielda). Z suwaków pobierane są `center` (poziom)
@@ -169,7 +275,7 @@ serie, badania, a na końcu pacjenta (zgodnie z zależnościami kluczy obcych).
 
 ---
 
-## 6. Biblioteki
+## 7. Biblioteki
 
 - **Qt 6** (moduły Widgets, Sql) — interfejs graficzny, modele danych,
   połączenie z bazą (`QSqlDatabase` ze sterownikiem `QODBC`), zapis XML
@@ -181,7 +287,7 @@ serie, badania, a na końcu pacjenta (zgodnie z zależnościami kluczy obcych).
 
 ---
 
-## 7. Kompilacja
+## 8. Kompilacja
 
 System budowania: **CMake + Ninja**.
 
@@ -224,7 +330,7 @@ sieciowe) są w warunku `if(WIN32)`.
 
 ---
 
-## 8. Instalacja w systemie
+## 9. Instalacja w systemie
 
 1. Zainstalować **PostgreSQL 16** i utworzyć bazę `medbaza`.
 2. Zainstalować sterownik **psqlODBC** (PostgreSQL Unicode x64) — z pakietu
@@ -237,7 +343,7 @@ z poziomu aplikacji (przyciski „Importuj DICOM" / „Importuj serie").
 
 ---
 
-## 9. Konfiguracja
+## 10. Konfiguracja
 
 - Serwer PostgreSQL działa na porcie **5433** (`pg_ctl ... -o "-p 5433"`).
 - Dane logowania domyślne: serwer `127.0.0.1`, baza `medbaza`,
